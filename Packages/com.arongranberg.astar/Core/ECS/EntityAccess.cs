@@ -1,0 +1,257 @@
+#if MODULE_ENTITIES
+using Unity.Collections.LowLevel.Unsafe;
+using Unity.Entities;
+
+namespace Pathfinding.ECS {
+	/// <summary>Helper for EntityAccess</summary>
+	static class EntityAccessHelper {
+		public static readonly int GlobalSystemVersionOffset = UnsafeUtility.GetFieldOffset(typeof(ComponentTypeHandle<int>).GetField("m_GlobalSystemVersion", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance));
+	}
+
+	/// <summary>
+	/// Wrapper for a pointer.
+	///
+	/// Very similar to the entities package RefRW<T> struct. But unfortunately that one cannot be used because the required constructor is not exposed.
+	/// </summary>
+	public ref struct ComponentRef<T> where T : unmanaged {
+		unsafe byte* ptr;
+
+		public unsafe ComponentRef(byte* ptr) {
+			this.ptr = ptr;
+		}
+
+		public ref T value {
+			[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+			get {
+				unsafe {
+					return ref *(T*)ptr;
+				}
+			}
+		}
+	}
+
+	/// <summary>Utility for efficient random access to entity storage data from the main thread</summary>
+	public struct EntityStorageCache {
+		EntityStorageInfo storage;
+		Entity entity;
+		int lastWorldHash;
+
+		/// <summary>
+		/// Retrieves the storage for a given entity.
+		///
+		/// This method is very fast if the entity is the same as the last call to this method.
+		/// If the entity is different, it will be slower.
+		///
+		/// Returns: True if the entity exists, and false if it does not.
+		/// </summary>
+		// Inlining makes this method about 20% faster. It's hot when accessing properties on the FollowerEntity component.
+		[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+		public bool Update (World world, Entity entity, out EntityManager entityManager, out EntityStorageInfo storage) {
+			storage = this.storage;
+			if (world == null || !world.IsCreated) {
+				entityManager = default;
+				return false;
+			}
+			entityManager = world.EntityManager;
+			// We must use entityManager.EntityOrderVersion here, not GlobalSystemVersion, because
+			// the GlobalSystemVersion does not necessarily update when structural changes happen.
+			var worldHash = entityManager.EntityOrderVersion ^ ((int)world.SequenceNumber << 8);
+			if (worldHash != lastWorldHash || entity != this.entity) {
+				if (!entityManager.Exists(entity)) return false;
+				this.storage = storage = entityManager.GetStorageInfo(entity);
+				this.entity = entity;
+				lastWorldHash = worldHash;
+			}
+			return true;
+		}
+
+		/// <summary>
+		/// Retrieves a component for a given entity.
+		///
+		/// This is a convenience method to call <see cref="Update"/> on this object and update on the access object, and then retrieve the component data.
+		///
+		/// This method is very fast if the entity is the same as the last call to this method.
+		/// If the entity is different, it will be slower.
+		///
+		/// Warning: You must not store the returned reference past a structural change in the ECS world.
+		///
+		/// Warning: Assumes that if the entity exists, it has the given component.
+		///
+		/// Returns: True if the entity exists, and false if it does not.
+		/// Throws: An exception if the entity does not have the given component.
+		/// </summary>
+		[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+		public bool GetComponentData<A>(World world, Entity entity, ref EntityAccess<A> access, out ComponentRef<A> value) where A : unmanaged, IComponentData {
+			if (Update(world, entity, out var entityManager, out var storage)) {
+				access.Update(entityManager);
+				unsafe {
+					value = new ComponentRef<A>((byte*)UnsafeUtility.AddressOf(ref access[storage]));
+				}
+				return true;
+			} else {
+				value = default;
+				return false;
+			}
+		}
+
+		/// <summary>
+		/// Retrieves an agent's <see cref="ManagedState"/>.
+		///
+		/// Returns: True if the entity exists, and false if it does not.
+		/// Throws: System.InvalidOperationException If the entity is a clone whose managed data has not been
+		/// repaired yet. See <see cref="AgentManagedStorage"/>.
+		/// </summary>
+		[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+		public bool GetManagedState (World world, Entity entity, ref AgentManagedAccess access, out ManagedState value) {
+			if (Update(world, entity, out var entityManager, out var storage)) {
+				access.Update(entityManager);
+				value = access.State(entity, storage);
+				return true;
+			} else {
+				value = null;
+				return false;
+			}
+		}
+
+		/// <summary>\copydocref{GetManagedState}</summary>
+		[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+		public bool GetManagedSettings (World world, Entity entity, ref AgentManagedAccess access, out ManagedSettings value) {
+			if (Update(world, entity, out var entityManager, out var storage)) {
+				access.Update(entityManager);
+				value = access.Settings(entity, storage);
+				return true;
+			} else {
+				value = null;
+				return false;
+			}
+		}
+	}
+
+	/// <summary>
+	/// Utility for efficient random access to an agent's managed data from the main thread.
+	///
+	/// Replaces the ManagedEntityAccess that A* used when the agent's managed data lived in class-based
+	/// components. Reads the agent's <see cref="AgentManagedRef"/> out of its chunk and resolves it against
+	/// <see cref="AgentManagedStorage"/>.
+	/// </summary>
+	public struct AgentManagedAccess {
+		EntityAccess<AgentManagedRef> access;
+
+		/// <param name="readOnly">Whether the managed data will only be read. The slot itself is always read-only;
+		/// this only affects which dependencies are completed before access.</param>
+		public AgentManagedAccess(bool readOnly) {
+			access = new EntityAccess<AgentManagedRef>(readOnly);
+		}
+
+		public void Update (EntityManager entityManager) {
+			access.Update(entityManager);
+		}
+
+		[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+		public ManagedState State (Entity entity, EntityStorageInfo storage) {
+			return AgentManagedStorage.GetChecked(access[storage].slot, entity).state;
+		}
+
+		[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+		public ManagedSettings Settings (Entity entity, EntityStorageInfo storage) {
+			return AgentManagedStorage.GetChecked(access[storage].slot, entity).settings;
+		}
+
+		/// <summary>The agent's in-progress off-mesh link traversal, or null if it is not traversing one.</summary>
+		[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+		internal ManagedAgentOffMeshLinkTraversal LinkTraversal (Entity entity, EntityStorageInfo storage) {
+			return AgentManagedStorage.GetChecked(access[storage].slot, entity).linkTraversal;
+		}
+
+		/// <summary>Replaces the agent's settings object.</summary>
+		public void SetSettings (Entity entity, EntityStorageInfo storage, ManagedSettings value) {
+			AgentManagedStorage.SetSettings(access[storage].slot, entity, value);
+		}
+	}
+
+	/// <summary>
+	/// Utility for efficient random access to entity component data from the main thread.
+	///
+	/// Since this struct returns a reference to the component data, it is faster than using EntityManager.GetComponentData,
+	/// in particular for larger component types.
+	///
+	/// Warning: Some checks are not enforced by this API. It is the user's responsibility to ensure that
+	/// this struct does not survive past an ECS system update. If you only use this struct from the main thread
+	/// and only store it locally on the stack, this should not be a problem.
+	/// This struct also does not enforce that you only read to the component data if the readOnly flag is set.
+	/// </summary>
+	public struct EntityAccess<T> where T : unmanaged, IComponentData {
+		public ComponentTypeHandle<T> handle;
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+		SystemHandle systemHandle;
+#endif
+		uint lastSystemVersion;
+		ulong worldSequenceNumber;
+		bool readOnly;
+
+		public EntityAccess(bool readOnly) {
+			handle = default;
+			this.readOnly = readOnly;
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+			systemHandle = default;
+#endif
+
+			// Version 0 is never used by EntityManager.GlobalSystemVersion
+			lastSystemVersion = 0;
+			worldSequenceNumber = 0;
+		}
+
+		/// <summary>
+		/// Update the component type handle if necessary.
+		///
+		/// This must be called if any jobs or system might have been scheduled since the struct was created or since the last call to Update.
+		/// </summary>
+		public void Update (EntityManager entityManager) {
+			// If the global system version has changed, jobs may have been scheduled which writes
+			// to the component data. Therefore we need to complete all dependencies before we can
+			// safely read or write to the component data.
+
+			var systemVersion = entityManager.GlobalSystemVersion;
+			var sequenceNumber = entityManager.WorldUnmanaged.SequenceNumber;
+			if (systemVersion != lastSystemVersion || worldSequenceNumber != sequenceNumber) {
+				if (lastSystemVersion == 0 || worldSequenceNumber != sequenceNumber) {
+					handle = entityManager.GetComponentTypeHandle<T>(readOnly);
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+					systemHandle = entityManager.WorldUnmanaged.GetExistingUnmanagedSystem<AIMoveSystem>();
+#endif
+				}
+
+				lastSystemVersion = systemVersion;
+				worldSequenceNumber = sequenceNumber;
+				if (readOnly) entityManager.CompleteDependencyBeforeRO<T>();
+				else entityManager.CompleteDependencyBeforeRW<T>();
+			}
+
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+			handle.Update(ref entityManager.WorldUnmanaged.ResolveSystemStateRef(systemHandle));
+#else
+			// handle.Update just does the same thing as this unsafe code, but in a much more roundabout way
+			unsafe {
+				var ptr = (byte*)UnsafeUtility.AddressOf(ref handle);
+				*(uint*)(ptr + EntityAccessHelper.GlobalSystemVersionOffset) = systemVersion;
+			}
+#endif
+		}
+
+		[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+		public bool HasComponent (EntityStorageInfo storage) {
+			return storage.Chunk.Has<T>(ref handle);
+		}
+
+		public ref T this[EntityStorageInfo storage] {
+			[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+			get {
+				unsafe {
+					var ptr = readOnly ? ((T*)storage.Chunk.GetRequiredComponentDataPtrRO(ref handle) + storage.IndexInChunk) : ((T*)storage.Chunk.GetRequiredComponentDataPtrRW(ref handle) + storage.IndexInChunk);
+					return ref *ptr;
+				}
+			}
+		}
+	}
+}
+#endif
