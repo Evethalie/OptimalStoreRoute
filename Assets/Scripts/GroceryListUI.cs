@@ -466,7 +466,7 @@ public class GroceryListUI : MonoBehaviour
         if (best != pickupEntry)
         {
             pickupEntry = best;
-            if (pickupLabel != null && best != null) pickupLabel.text = $"Pick up {Capitalize(best.canonical)}?";
+            if (pickupLabel != null && best != null) pickupLabel.text = $"Press E to pick up {Capitalize(best.canonical)}";
         }
 
         SetVisible(pickupButton, pickupEntry != null);
