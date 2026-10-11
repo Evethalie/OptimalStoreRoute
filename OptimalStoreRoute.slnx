@@ -2,12 +2,12 @@
   <Project Path="AstarPathfindingProject.csproj" />
   <Project Path="AstarPathfindingProjectEditor.csproj" />
   <Project Path="Assembly-CSharp-Editor.csproj" />
+  <Project Path="Assembly-CSharp.csproj" />
   <Project Path="Drawing.csproj" />
   <Project Path="AstarPackageToolsEditor.csproj" />
   <Project Path="Unity.StarterAssets.Editor.csproj" />
   <Project Path="Unity.StarterAssets.csproj" />
   <Project Path="andywiecko.BurstTriangulator.csproj" />
-  <Project Path="Assembly-CSharp.csproj" />
   <Project Path="PackageTools.csproj" />
   <Project Path="DrawingEditor.csproj" />
   <Project Path="URPWizard.csproj" />
