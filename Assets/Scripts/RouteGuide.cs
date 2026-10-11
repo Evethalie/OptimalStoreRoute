@@ -1,6 +1,8 @@
+using MoreMountains.Feedbacks;
+using Pathfinding;
 using System;
 using System.Collections.Generic;
-using Pathfinding;
+using System.Security.Cryptography;
 using UnityEngine;
 
 
@@ -92,7 +94,7 @@ public class RouteGuide : MonoBehaviour
         public float distance;    // Distance along the path to this stop.
         public bool isCheckout;
     }
-
+    [SerializeField] MMF_Player doneFeedback;
     private readonly List<Transform> pendingItems = new List<Transform>();
     private readonly List<Vector3> path = new List<Vector3>();
     private readonly List<Stop> stops = new List<Stop>();
@@ -414,7 +416,20 @@ public class RouteGuide : MonoBehaviour
 
         nextStop++;
         targetProgress = Mathf.Max(targetProgress, stop.distance);
+
+        // Runs once, on the frame the player reaches checkout.
+        if (doneFeedback != null)
+        {
+            doneFeedback.PlayFeedbacks();
+           // Invoke(nameof(StopDoneFeedback), 5f);
+        }
+
         RouteCompleted?.Invoke();
+    }
+
+    void StopDoneFeedback()
+    {
+        if (doneFeedback != null) doneFeedback.StopFeedbacks();
     }
 
     // Marks an item target as picked up, in any order, and replans the rest

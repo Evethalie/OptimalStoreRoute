@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using MoreMountains.Feedbacks;
+
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
@@ -14,7 +16,7 @@ public class GroceryListUI : MonoBehaviour
     [Header("References")]
     [SerializeField] private AisleLookup lookup;
     [SerializeField] private RouteGuide routeGuide;
-
+    
     [Tooltip("Optional. Cart that shows a model for each picked-up item.")]
     [SerializeField] private ShoppingCart cart;
 
@@ -25,7 +27,7 @@ public class GroceryListUI : MonoBehaviour
     [Tooltip("Panel shown while typing. Uses the input field's own object when empty.")]
     [SerializeField] private GameObject inputPanel;
     [SerializeField] private TMP_InputField inputField;
-
+    [SerializeField] private MMF_Player CollectionFeedback;
 #if ENABLE_INPUT_SYSTEM
     [SerializeField] private Key openKey = Key.G;
 #else
@@ -380,6 +382,7 @@ public class GroceryListUI : MonoBehaviour
 
     IEnumerator PlayCheck(Image image)
     {
+        
         image.enabled = true;
         WaitForSeconds wait = new WaitForSeconds(1f / Mathf.Max(1f, checkFps));
 
@@ -388,6 +391,7 @@ public class GroceryListUI : MonoBehaviour
             image.sprite = frame;
             yield return wait;
         }
+        
     }
 
     // ---------- Navigation ----------
@@ -423,7 +427,7 @@ public class GroceryListUI : MonoBehaviour
         routeGuide.SetItems(targets);
     }
 
-    // One target per aisle that still has unchecked items, in the order they were added.
+    
     List<Transform> PendingTargets()
     {
         List<Transform> targets = new List<Transform>();
@@ -434,18 +438,13 @@ public class GroceryListUI : MonoBehaviour
         return targets;
     }
 
-    // ---------- Pickup ----------
-
-    // Start Navigation shows only while the input field is open, and hides
-    // once navigation starts. It returns after the route completes.
+    
     void UpdateStartButton()
     {
         SetVisible(startNavigationButton, IsOpen && !navigating);
     }
 
-    // Shows the prompt for the closest unchecked item whose aisle is within
-    // pickupRadius. Items in the same aisle come up one at a time, in the
-    // order they were added.
+    
     void UpdatePickupPrompt()
     {
         Entry best = null;
@@ -483,7 +482,7 @@ public class GroceryListUI : MonoBehaviour
         ShowFeedback($"Picked up {Capitalize(entry.canonical)}.");
 
         if (cart != null) cart.AddItem(entry.canonical);
-
+        if (CollectionFeedback != null) CollectionFeedback.PlayFeedbacks();
         // The route moves on once every item in this aisle is picked up.
         bool aisleDone = !entries.Exists(e => !e.done && e.target == entry.target);
         if (navigating && aisleDone) routeGuide.CompleteStop(entry.target);
